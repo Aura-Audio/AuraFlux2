@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Procedural Resonance: Water</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+            margin: 0;
+        }
+        .container {
+            background: #1e1e1e;
+            padding: 30px;
+            border-radius: 12px;
+            border: 1px solid #333;
+            max-width: 600px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        h1 { color: #03dac6; margin-top: 0; }
+        p { color: #aaa; line-height: 1.5; font-size: 0.95em; }
+        
+        .control-panel {
+            background: #252525;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            text-align: left;
+            border: 1px solid #333;
+        }
+        .control-item {
+            display: flex;
+            flex-direction: column;
+        }
+        .control-item label {
+            font-size: 0.85em;
+            color: #03dac6;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+        }
+        .control-item select, .control-item input[type="range"] {
+            background: #121212;
+            color: #e0e0e0;
+            border: 1px solid #444;
+            padding: 10px;
+            border-radius: 6px;
+            font-family: inherit;
+            outline: none;
+            cursor: pointer;
+        }
+        .control-item select:focus {
+            border-color: #03dac6;
+        }
+        .control-item.full-width {
+            grid-column: span 2;
+        }
+        
+        .btn-group {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-top: 25px;
+        }
+        button {
+            padding: 15px 20px;
+            font-size: 1.1em;
+            font-weight: bold;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        #btn-normal { background-color: #3498db; color: white; }
+        #btn-resonant { background-color: #9b59b6; color: white; }
+        #btn-stop { background-color: #e74c3c; color: white; display: none; }
+        
+        button:hover { filter: brightness(1.2); }
+        button:active { transform: scale(0.98); }
+
+        .visualizers {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            width: 100%;
+        }
+        .canvas-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        canvas {
+            width: 100%;
+            height: 120px;
+            background: #000;
+            border-radius: 6px;
+            border: 1px solid #444;
+        }
+        .label {
+            font-size: 0.8em;
+            color: #888;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Water to Music</h1>
+        <p>This generates procedural water using chaotic noise and sweeping sines. Play with the controls below, and click "Resonant" to route the water through high-Q filters tuned to specific chords.</p>
+        
+        <div class="control-panel">
+            <div class="control-item">
+                <label for="noise-color">Base Noise Tone</label>
+                <select id="noise-color">
+                    <option value="brown">Brown (Deep / Sub)</option>
+                    <option value="pink">Pink (Balanced Flow)</option>
+                    <option value="white">White (Hiss / Rain)</option>
+                    <option value="blue">Blue (Crisp Splashes)</option>
+                </select>
+            </div>
+            
+            <div class="control-item">
+                <label for="chord-select">Resonant Chord</label>
+                <select id="chord-select">
+                    <option value="c_major">C Major</option>
+                    <option value="a_minor">A Minor</option>
+                    <option value="f_maj7">F Major 7</option>
+                    <option value="d_dorian">D Dorian</option>
+                    <option value="mystic">Mystic (6 Notes)</option>
+                </select>
+            </div>
+
+            <div class="control-item full-width">
+                <label for="water-density"><span>Water Activity / Density</span> <span id="density-val">50%</span></label>
+                <input type="range" id="water-density" min="1" max="100" value="50">
+            </div>
+        </div>
+
+        <div class="visualizers">
+            <div class="canvas-container">
+                <span class="label">Oscilloscope (Waveform)</span>
+                <canvas id="osc-canvas"></canvas>
+            </div>
+            <div class="canvas-container">
+                <span class="label">Spectrum (Frequencies)</span>
+                <canvas id="fft-canvas"></canvas>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button id="btn-normal">🌊 Play Normal Water</button>
+            <button id="btn-resonant">✨ Play Resonant Water</button>
+            <button id="btn-stop">⏹ Stop Audio</button>
+        </div>
+    </div>
+
+    <script>
+        let audioCtx, masterGain, waterMixBus, noiseNode, noiseLowpass, analyzer;
+        let isPlaying = false;
+        let bubbleTimer;
+        let currentMode = 'none';
+        let activeFilters = [];
+
+        const oscCanvas = document.getElementById('osc-canvas');
+        const oscCtx = oscCanvas.getContext('2d');
+        const fftCanvas = document.getElementById('fft-canvas');
+        const fftCtx = fftCanvas.getContext('2d');
+
+        // Setup canvases
+        oscCanvas.width = oscCanvas.clientWidth; oscCanvas.height = oscCanvas.clientHeight;
+        fftCanvas.width = fftCanvas.clientWidth; fftCanvas.height = fftCanvas.clientHeight;
+
+        // Chord Dictionary (Frequencies in Hz)
+        const CHORDS = {
+            c_major: [261.63, 329.63, 392.00, 523.25], 
+            a_minor: [220.00, 261.63, 329.63, 440.00], 
+            f_maj7:  [174.61, 261.63, 329.63, 349.23, 440.00], 
+            d_dorian: [146.83, 174.61, 220.00, 293.66, 349.23], 
+            mystic:  [196.00, 277.18, 329.63, 415.30, 466.16, 587.33] 
+        };
+
+        // --- Event Listeners for Live Control Updates ---
+        document.getElementById('water-density').addEventListener('input', (e) => {
+            document.getElementById('density-val').textContent = e.target.value + '%';
+        });
+
+        document.getElementById('chord-select').addEventListener('change', () => {
+            if (isPlaying && currentMode === 'resonant') {
+                rebuildFilters(); // Swap chords smoothly while playing
+            }
+        });
+
+        document.getElementById('noise-color').addEventListener('change', (e) => {
+            if (isPlaying && noiseNode) {
+                // Hot-swap the background noise generator
+                noiseNode.stop();
+                noiseNode.disconnect();
+                noiseNode = createNoiseNode(e.target.value);
+                noiseNode.connect(noiseLowpass);
+                noiseNode.start();
+                updateLowpassFrequency(e.target.value);
+            }
+        });
+
+
+        function initAudio() {
+            if (audioCtx) return;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            
+            masterGain = audioCtx.createGain();
+            const compressor = audioCtx.createDynamicsCompressor();
+            compressor.threshold.value = -10;
+            compressor.ratio.value = 4;
+            
+            analyzer = audioCtx.createAnalyser();
+            analyzer.fftSize = 2048;
+
+            masterGain.connect(compressor);
+            compressor.connect(analyzer);
+            analyzer.connect(audioCtx.destination);
+            
+            drawVisualizers();
+        }
+
+        // Procedural Noise Generator supporting Brown, Pink, White, and Blue
+        function createNoiseNode(color) {
+            const bufferSize = audioCtx.sampleRate * 2; 
+            const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const output = noiseBuffer.getChannelData(0);
+            
+            let lastOut = 0;
+            let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+
+            for (let i = 0; i < bufferSize; i++) {
+                let white = Math.random() * 2 - 1;
+                
+                if (color === 'brown') {
+                    output[i] = (lastOut + (0.02 * white)) / 1.02;
+                    lastOut = output[i];
+                    output[i] *= 3.5;
+                } 
+                else if (color === 'pink') {
+                    b0 = 0.99886 * b0 + white * 0.0555179;
+                    b1 = 0.99332 * b1 + white * 0.0750759;
+                    b2 = 0.96900 * b2 + white * 0.1538520;
+                    b3 = 0.86650 * b3 + white * 0.3104856;
+                    b4 = 0.55000 * b4 + white * 0.5329522;
+                    b5 = -0.7616 * b5 - white * 0.0168980;
+                    output[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.11;
+                    b6 = white * 0.115926;
+                } 
+                else if (color === 'white') {
+                    output[i] = white * 0.3;
+                } 
+                else if (color === 'blue') {
+                    output[i] = (white - lastOut) * 0.5;
+                    lastOut = white;
+                }
+            }
+            const node = audioCtx.createBufferSource();
+            node.buffer = noiseBuffer;
+            node.loop = true;
+            return node;
+        }
+
+        function updateLowpassFrequency(color) {
+            if (!noiseLowpass) return;
+            // Higher pitched noise gets a higher cutoff so it doesn't just sound brown
+            switch(color) {
+                case 'brown': noiseLowpass.frequency.value = 600; break;
+                case 'pink': noiseLowpass.frequency.value = 1000; break;
+                case 'white': noiseLowpass.frequency.value = 2200; break;
+                case 'blue': noiseLowpass.frequency.value = 4000; break;
+            }
+        }
+
+        function spawnBubble() {
+            if (!isPlaying) return;
+
+            // Density mapped from 0.01 (1%) to 1.0 (100%)
+            const density = parseInt(document.getElementById('water-density').value, 10) / 100;
+            
+            // Allow multiple bubbles to spawn simultaneously at high densities (Splash effect)
+            const bubbleCount = density > 0.7 ? Math.floor(Math.random() * 3) + 1 : 1;
+
+            for(let b = 0; b < bubbleCount; b++) {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(waterMixBus);
+
+                const now = audioCtx.currentTime;
+                
+                const baseFreq = 200 + Math.random() * 600;
+                const duration = 0.04 + Math.random() * 0.1;
+                
+                osc.frequency.setValueAtTime(baseFreq, now);
+                osc.frequency.exponentialRampToValueAtTime(baseFreq * (1.2 + Math.random()), now + duration);
+
+                gain.gain.setValueAtTime(0, now);
+                // Louder bubbles when density is higher to cut through the noise
+                gain.gain.linearRampToValueAtTime((0.2 + Math.random() * 0.3) * (0.6 + density*0.4), now + 0.01);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+                osc.start(now);
+                osc.stop(now + duration);
+            }
+
+            // High Density = Faster Bubble Spawning
+            const minDelay = 10 + (1 - density) * 120;
+            const varDelay = 30 + (1 - density) * 400;
+            const nextTime = minDelay + Math.random() * varDelay;
+
+            bubbleTimer = setTimeout(spawnBubble, nextTime);
+        }
+
+        function rebuildFilters() {
+            if (!waterMixBus) return;
+
+            // Disconnect old filters
+            activeFilters.forEach(f => {
+                waterMixBus.disconnect(f);
+                f.disconnect();
+            });
+            activeFilters = [];
+
+            // Build new chord bank
+            const chordKey = document.getElementById('chord-select').value;
+            const frequencies = CHORDS[chordKey];
+            
+            frequencies.forEach(freq => {
+                const bandpass = audioCtx.createBiquadFilter();
+                bandpass.type = 'bandpass';
+                bandpass.frequency.value = freq;
+                bandpass.Q.value = 45; // Magnifying glass effect
+                
+                waterMixBus.connect(bandpass);
+                bandpass.connect(masterGain);
+                activeFilters.push(bandpass);
+            });
+        }
+
+        function playWater(mode) {
+            if (audioCtx) stopAudio();
+            initAudio();
+            isPlaying = true;
+            currentMode = mode;
+
+            document.getElementById('btn-normal').style.display = 'none';
+            document.getElementById('btn-resonant').style.display = 'none';
+            document.getElementById('btn-stop').style.display = 'block';
+
+            waterMixBus = audioCtx.createGain();
+            
+            // Background Water Rush (Noise)
+            const color = document.getElementById('noise-color').value;
+            noiseNode = createNoiseNode(color);
+            
+            noiseLowpass = audioCtx.createBiquadFilter();
+            noiseLowpass.type = 'lowpass';
+            updateLowpassFrequency(color); 
+            
+            noiseNode.connect(noiseLowpass);
+            noiseLowpass.connect(waterMixBus);
+            noiseNode.start();
+
+            // Start Procedural Bubbling
+            spawnBubble();
+
+            // Routing
+            if (mode === 'normal') {
+                masterGain.gain.value = 1.0;
+                waterMixBus.connect(masterGain);
+            } 
+            else if (mode === 'resonant') {
+                masterGain.gain.value = 0.8;
+                rebuildFilters();
+
+                // Mix in 15% original dry water for texture
+                const dryGain = audioCtx.createGain();
+                dryGain.gain.value = 0.15;
+                waterMixBus.connect(dryGain);
+                dryGain.connect(masterGain);
+            }
+        }
+
+        function stopAudio() {
+            isPlaying = false;
+            currentMode = 'none';
+            clearTimeout(bubbleTimer);
+            
+            if (noiseNode) {
+                try { noiseNode.stop(); } catch(e){}
+            }
+            if (waterMixBus) waterMixBus.disconnect();
+            
+            activeFilters.forEach(f => f.disconnect());
+            activeFilters = [];
+
+            document.getElementById('btn-normal').style.display = 'block';
+            document.getElementById('btn-resonant').style.display = 'block';
+            document.getElementById('btn-stop').style.display = 'none';
+        }
+
+        function drawVisualizers() {
+            if (!analyzer) return;
+            requestAnimationFrame(drawVisualizers);
+
+            // Oscilloscope
+            const timeData = new Float32Array(analyzer.frequencyBinCount);
+            analyzer.getFloatTimeDomainData(timeData);
+            
+            oscCtx.fillStyle = '#000000';
+            oscCtx.fillRect(0, 0, oscCanvas.width, oscCanvas.height);
+            oscCtx.lineWidth = 2;
+            oscCtx.strokeStyle = currentMode === 'resonant' ? '#9b59b6' : '#3498db';
+            oscCtx.beginPath();
+            
+            const sliceWidth = oscCanvas.width / timeData.length;
+            let x = 0;
+            for (let i = 0; i < timeData.length; i++) {
+                const y = (timeData[i] * oscCanvas.height / 2) + (oscCanvas.height / 2);
+                i === 0 ? oscCtx.moveTo(x, y) : oscCtx.lineTo(x, y);
+                x += sliceWidth;
+            }
+            oscCtx.stroke();
+
+            // Spectrum FFT
+            const freqData = new Uint8Array(analyzer.frequencyBinCount);
+            analyzer.getByteFrequencyData(freqData);
+            
+            fftCtx.fillStyle = '#000000';
+            fftCtx.fillRect(0, 0, fftCanvas.width, fftCanvas.height);
+            
+            const barWidth = fftCanvas.width / (freqData.length / 3); 
+            
+            fftCtx.beginPath();
+            fftCtx.moveTo(0, fftCanvas.height);
+            for(let i = 0; i < freqData.length / 3; i++) {
+                const v = freqData[i] / 255.0;
+                fftCtx.lineTo(i * barWidth, fftCanvas.height - (v * fftCanvas.height));
+            }
+            fftCtx.lineTo(fftCanvas.width, fftCanvas.height);
+            fftCtx.fillStyle = currentMode === 'resonant' ? 'rgba(155, 89, 182, 0.5)' : 'rgba(52, 152, 219, 0.5)';
+            fftCtx.fill();
+        }
+
+        document.getElementById('btn-normal').addEventListener('click', () => playWater('normal'));
+        document.getElementById('btn-resonant').addEventListener('click', () => playWater('resonant'));
+        document.getElementById('btn-stop').addEventListener('click', stopAudio);
+    </script>
+</body>
+  </html>
